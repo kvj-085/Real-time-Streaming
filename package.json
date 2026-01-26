@@ -1,0 +1,20 @@
+{
+  "name": "realtime-tts-streaming",
+  "version": "1.0.0",
+  "description": "Real-time streaming TTS backend for AI avatar system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["tts", "streaming", "realtime", "sse"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "livekit-server-sdk": "^0.5.2",
+    "node-fetch": "^2.7.0"
+  }
+}
