@@ -29,6 +29,7 @@ function requireEnv(name) {
 
 const TAVUS_API_KEY = process.env.TAVUS_API_KEY;
 const TAVUS_PERSONA_ID = process.env.TAVUS_PERSONA_ID;
+const TAVUS_REPLICA_ID = process.env.TAVUS_REPLICA_ID;
 const TAVUS_API_BASE = process.env.TAVUS_API_BASE;
 
 /**
@@ -40,18 +41,15 @@ const TAVUS_API_BASE = process.env.TAVUS_API_BASE;
  * @returns {Promise<Object>} Session info with video stream URL
  */
 async function startTavusSession(sessionName) {
-  if (!TAVUS_API_KEY || !TAVUS_PERSONA_ID) {
-    console.warn('[Tavus] API key or persona ID missing. Tavus disabled.');
+  if (!TAVUS_API_KEY || !TAVUS_PERSONA_ID || !TAVUS_REPLICA_ID) {
+    console.warn('[Tavus] API key, persona ID, or replica ID missing. Tavus disabled.');
     return { disabled: true };
   }
 
   try {
-    // Construct URL properly - don't append /stream-sessions if already in base
-    const endpoint = TAVUS_API_BASE.includes('stream-sessions') 
-      ? TAVUS_API_BASE 
-      : `${TAVUS_API_BASE}/stream-sessions`;
+    const endpoint = `${TAVUS_API_BASE}/conversations`;
     
-    console.log(`[Tavus] Creating session at: ${endpoint}`);
+    console.log(`[Tavus] Creating conversation at: ${endpoint}`);
     
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -60,12 +58,10 @@ async function startTavusSession(sessionName) {
         'x-api-key': TAVUS_API_KEY,
       },
       body: JSON.stringify({
+        replica_id: TAVUS_REPLICA_ID,
         persona_id: TAVUS_PERSONA_ID,
-        video_resolution: '720p',
-        // Tavus will use streaming audio, not pre-recorded
-        audio_source: 'stream',
       }),
-      timeout: 3000, // 3 second timeout - fail fast
+      timeout: 15000,
     });
 
     if (!response.ok) {
@@ -75,16 +71,38 @@ async function startTavusSession(sessionName) {
     }
 
     const session = await response.json();
-    console.log(`[Tavus] Session created: ${session.session_id || 'unknown'}`);
-    console.log(`[Tavus] Stream URL: ${session.stream_url || session.url || 'unknown'}`);
+    const conversationId = session.conversation_id || session.id;
+    // Prefer API-provided stream_url; fall back to constructed daily URL
+    const streamUrl = session.stream_url || `https://tavus.daily.co/${conversationId}/stream.m3u8`;
+    // Prefer any API-provided ingest endpoints before falling back
+    const audioEndpoint =
+      session.audio_url ||
+      session.audio_endpoint ||
+      session.ingest_url ||
+      `${TAVUS_API_BASE}/conversations/${conversationId}/audio`;
+    
+    console.log(`[Tavus] Conversation created: ${conversationId}`);
+    console.log(`[Tavus] Stream URL: ${streamUrl}`);
+    console.log(`[Tavus] Viewer URL: ${session.conversation_url}`);
+    console.log(`[Tavus] Session keys: ${Object.keys(session).join(', ')}`);
+    
+    // NOTE: Tavus does not provide a server-side audio ingest endpoint.
+    // The conversation_url is a Daily.co room for WebRTC clients to join.
+    // To send audio, you must join the Daily.co room as a participant using Daily's client SDK.
+    // For now, we'll return the stream URL so you can see the avatar (idle state).
+    console.warn('[Tavus] ⚠️  No server-side audio ingest available. Audio push disabled.');
+    console.warn('[Tavus] To enable audio: join the Daily.co room as a WebRTC participant.');
 
     return {
-      sessionId: session.session_id || session.id,
-      streamUrl: session.stream_url || session.url,
+      sessionId: conversationId,
+      streamUrl: streamUrl,
+      viewerUrl: session.conversation_url, // Daily.co room URL for WebRTC clients
+      audioEndpoint: null, // No REST API for audio ingest
       disabled: false,
+      audioDisabled: true, // Mark that audio push won't work
     };
   } catch (error) {
-    console.error('[Tavus] Failed to start session:', error.message);
+    console.error('[Tavus] Failed to start conversation:', error.message);
     if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
       console.error('[Tavus] Network error - check API endpoint and connectivity');
     }
@@ -101,38 +119,47 @@ async function startTavusSession(sessionName) {
  * @param {number} timestamp - Timing info in ms
  * @returns {Promise<void>}
  */
-async function sendAudioToTavus(sessionId, audioChunk, timestamp) {
+async function sendAudioToTavus(sessionId, audioChunk, timestamp, audioEndpoint) {
   if (!TAVUS_API_KEY) {
     return; // Tavus disabled
   }
 
-  try {
-    // Convert PCM chunk to base64 for transmission
-    const base64Audio = audioChunk.toString('base64');
+  // Basic guard to avoid endless 404 spam
+  if (!sessionId) return;
 
-    const response = await fetch(
-      `${TAVUS_API_BASE}/stream-sessions/${sessionId}/audio`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': TAVUS_API_KEY,
-        },
-        body: JSON.stringify({
-          audio_data: base64Audio,
-          timestamp_ms: timestamp,
-        }),
-      }
-    );
+  try {
+    const base64Audio = audioChunk.toString('base64');
+    const endpoint =
+      audioEndpoint || `${TAVUS_API_BASE}/conversations/${sessionId}/audio`;
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': TAVUS_API_KEY,
+      },
+      body: JSON.stringify({
+        audio_data: base64Audio,
+        timestamp_ms: timestamp,
+      }),
+    });
 
     if (!response.ok && response.status !== 204) {
+      const bodyText = await response.text();
+      const detail = bodyText ? ` | body: ${bodyText.slice(0, 200)}` : '';
       console.warn(
-        `[Tavus] Audio push failed: ${response.status}. Continuing anyway...`
+        `[Tavus] Audio push failed: ${response.status} at ${endpoint}${detail}`
       );
+      // If 404, this endpoint may be wrong for this convo; stop further sends for this session
+      if (response.status === 404) {
+        throw new Error('audio-endpoint-404');
+      }
+      throw new Error(`audio-push-${response.status}`);
     }
   } catch (error) {
     console.warn(`[Tavus] Error sending audio chunk:`, error.message);
-    // Continue streaming even if Tavus has issues
+    // Re-throw so callers can disable Tavus when the endpoint is bad
+    throw error;
   }
 }
 
@@ -148,15 +175,15 @@ async function endTavusSession(sessionId) {
   }
 
   try {
-    await fetch(`${TAVUS_API_BASE}/stream-sessions/${sessionId}`, {
+    await fetch(`${TAVUS_API_BASE}/conversations/${sessionId}`, {
       method: 'DELETE',
       headers: {
         'x-api-key': TAVUS_API_KEY,
       },
     });
-    console.log(`[Tavus] Session ended: ${sessionId}`);
+    console.log(`[Tavus] Conversation ended: ${sessionId}`);
   } catch (error) {
-    console.warn(`[Tavus] Error ending session:`, error.message);
+    console.warn(`[Tavus] Error ending conversation:`, error.message);
   }
 }
 
@@ -170,18 +197,14 @@ async function testTavusConnection() {
   }
 
   try {
-    const endpoint = TAVUS_API_BASE.includes('stream-sessions') 
-      ? TAVUS_API_BASE.replace('/stream-sessions', '')
-      : TAVUS_API_BASE;
+    console.log(`[Tavus] Testing connectivity to ${TAVUS_API_BASE}`);
     
-    console.log(`[Tavus] Testing connectivity to ${endpoint}`);
-    
-    const response = await fetch(`${endpoint}/personas`, {
+    const response = await fetch(`${TAVUS_API_BASE}/replicas`, {
       method: 'GET',
       headers: {
         'x-api-key': TAVUS_API_KEY,
       },
-      timeout: 3000,
+      timeout: 15000,
     });
 
     const ok = response.ok;

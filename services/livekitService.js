@@ -21,19 +21,48 @@ async function streamTTSChunks(text, tavusEnabled = true) {
   let count = 0;
   const chunks = [];
   let tavusSession = null;
+  const pendingForTavus = [];
+  let flushingPending = false;
 
-  // Start Tavus in background - NEVER wait for it
+  // Helper: flush buffered chunks to Tavus in order (non-blocking to SSE)
+  const flushPendingAsync = () => {
+    if (flushingPending || !tavusSession || tavusSession.disabled) return;
+    flushingPending = true;
+    (async () => {
+      while (pendingForTavus.length && tavusSession && !tavusSession.disabled) {
+        const { chunk, timestamp } = pendingForTavus.shift();
+        try {
+          await sendAudioToTavus(
+            tavusSession.sessionId,
+            chunk,
+            timestamp,
+            tavusSession.audioEndpoint
+          );
+        } catch (err) {
+          console.warn(`[Tavus] Buffered chunk failed:`, err.message);
+          break; // stop flushing on failure to avoid tight loop
+        }
+      }
+      flushingPending = false;
+    })();
+  };
+
+  // Start Tavus in background
+  let tavusSessionPromise = null;
   if (tavusEnabled) {
-    startTavusSession(`tts-${Date.now()}`)
+    tavusSessionPromise = startTavusSession(`tts-${Date.now()}`)
       .then(session => {
         if (session && !session.disabled) {
           tavusSession = session;
           activeSessions[session.sessionId] = true;
           console.log('[TTS Stream] Tavus connected in background');
+          flushPendingAsync();
         }
+        return session;
       })
       .catch(err => {
         console.log('[TTS Stream] Tavus failed, continuing audio-only');
+        return { disabled: true };
       });
   }
 
@@ -43,11 +72,21 @@ async function streamTTSChunks(text, tavusEnabled = true) {
     const base64 = chunk.toString('base64');
     chunks.push(base64);
 
-    // Send to Tavus if session is active (non-blocking)
-    if (tavusSession && !tavusSession.disabled) {
-      sendAudioToTavus(tavusSession.sessionId, chunk, timestamp).catch(err =>
-        console.warn(`[Tavus] Chunk ${count} failed:`, err.message)
-      );
+    // Send to Tavus if session is active AND audio is supported, else buffer
+    if (tavusSession && !tavusSession.disabled && !tavusSession.audioDisabled) {
+      sendAudioToTavus(
+        tavusSession.sessionId,
+        chunk,
+        timestamp,
+        tavusSession.audioEndpoint
+      ).catch(err => {
+        console.warn(`[Tavus] Chunk ${count} failed:`, err.message);
+        if (err.message === 'audio-endpoint-404') {
+          tavusSession.disabled = true;
+        }
+      });
+    } else if (tavusEnabled && !tavusSession?.audioDisabled) {
+      pendingForTavus.push({ chunk, timestamp });
     }
 
     const elapsed = Date.now() - start;
@@ -55,6 +94,18 @@ async function streamTTSChunks(text, tavusEnabled = true) {
       `[TTS Stream] Chunk ${count} | ${chunk.byteLength} bytes | ` +
       `elapsed=${elapsed}ms | tavus=${tavusSession ? 'active' : 'disabled'}`
     );
+  }
+
+  // If Tavus not ready yet, give it a brief moment to resolve so we can return the stream URL
+  if (!tavusSession && tavusSessionPromise) {
+    await Promise.race([
+      tavusSessionPromise,
+      new Promise(resolve => setTimeout(() => resolve({ disabled: true, pending: true }), 2000)),
+    ]);
+  }
+
+  if (tavusSession && !tavusSession.disabled && pendingForTavus.length) {
+    flushPendingAsync();
   }
 
   const totalTime = Date.now() - start;

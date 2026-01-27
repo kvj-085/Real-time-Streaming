@@ -250,16 +250,16 @@
 
       // Use HLS.js if available for better compatibility
       if (typeof Hls !== 'undefined') {
-        const hls = new Hls();
+        const hls = new Hls({ lowLatencyMode: true });
         hls.loadSource(streamUrl);
         hls.attachMedia(tavusVideoElement);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          tavusVideoElement.play();
+          tavusVideoElement.play().catch(err => console.warn('Video play failed:', err));
         });
       } else {
         // Fallback for browsers with native HLS support
         tavusVideoElement.src = streamUrl;
-        tavusVideoElement.oncanplay = () => tavusVideoElement.play();
+        tavusVideoElement.oncanplay = () => tavusVideoElement.play().catch(err => console.warn('Video play failed:', err));
       }
 
       videoContainer.appendChild(tavusVideoElement);

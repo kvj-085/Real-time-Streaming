@@ -6,15 +6,13 @@ A production-ready backend system demonstrating real-time audio streaming synchr
 ## 🎯 Key Features
 
 - ✅ Real-time streaming TTS using Windows SAPI (offline, no cloud latency)
-- ✅ Tavus Persona API integration for avatar rendering
-- ✅ Non-blocking Tavus initialization (TTS streams instantly)
 - ✅ Server-Sent Events (SSE) for efficient one-way streaming
 - ✅ PCM16 audio at 48kHz, mono, 40ms chunks
 - ✅ Base64-encoded audio chunk transport
 - ✅ Web Audio API client for seamless playback
-- ✅ Avatar video display via HLS streaming
 - ✅ Modular, production-style architecture
 - ✅ Comprehensive logging and metrics
+- ⚠️ **Tavus avatar integration (partial)**: Creates conversation and displays video stream, but **audio lip-sync requires WebRTC client** (not REST API)
 
 ## 🏗️ Architecture
 
@@ -37,22 +35,25 @@ Backend/
 
 ### Architecture Highlights
 
-**Streaming Flow:**
+**Streaming Flow (Current Implementation):**
 1. Client sends POST /speak with text and `enableTavus` flag
 2. Server establishes SSE connection
 3. Windows SAPI synthesizes speech to PCM16LE at 48kHz (offline, instant)
-4. TTS chunks are streamed in two paths simultaneously:
-   - **Path A:** Base64 chunks → SSE → Frontend → Web Audio API playback
-   - **Path B:** Raw PCM chunks → Tavus API → Avatar lip-sync rendering
-5. Tavus session starts in background (non-blocking) so TTS streams immediately
-6. Avatar video streams via HLS from Tavus to frontend
-7. Audio and video perfectly synced
+4. TTS chunks are streamed:
+   - **Path A:** Base64 chunks → SSE → Frontend → Web Audio API playback ✅
+   - **Path B (Not Working):** ~~Raw PCM chunks → Tavus API~~ ❌ (No REST endpoint available)
+5. If `enableTavus=true`:
+   - Creates Tavus conversation (background, non-blocking)
+   - Returns Daily.co viewer URL and HLS stream URL
+   - Avatar video displays (idle state, no lip-sync)
+6. Audio plays through Web Audio API only (not synced to avatar)
 
 **Key Design Decisions:**
 - **Offline TTS:** Windows SAPI eliminates cloud API latency (~100-300ms saved)
 - **Non-blocking Tavus:** Promise-based background connection prevents TTS delay
 - **Immediate streaming:** First audio chunk arrives in <100ms
 - **Modular services:** TTS, Tavus, tokens are independent
+- **Tavus Limitation Discovered:** Tavus Conversations API requires WebRTC (Daily.co SDK), not REST audio push
 
 ## 🚀 Quick Start
 
@@ -203,48 +204,112 @@ PCM16LE Audio Specification:
 
 ## 🎭 Tavus Integration
 
-### How It Works
+### Current Status: ⚠️ Partial Implementation
 
-1. **Session Creation** (non-blocking background process):
-   - POST to `https://api.tavus.io/v2/stream-sessions`
-   - Persona ID: `p01704642852` (configured in .env)
-   - Returns session ID and HLS stream URL
+**What Works:**
+1. ✅ **Conversation Creation**:
+   - POST to `https://tavusapi.com/v2/conversations`
+   - Creates Daily.co room with Tavus avatar
+   - Returns `conversation_url` (Daily.co WebRTC room) and HLS stream URL
 
-2. **Audio Forwarding**:
-   - Each TTS chunk sent to Tavus stream session
-   - Tavus uses audio for avatar mouth animation (lip-sync)
+2. ✅ **Video Display**:
+   - Avatar video streams via HLS (.m3u8)
+   - Frontend displays avatar in idle/waiting state
+   - Uses HLS.js for playback
 
-3. **Video Streaming**:
-   - Tavus renders animated avatar video
-   - Streams via HLS (.m3u8 playlist)
-   - Frontend plays with HLS.js
+**What Doesn't Work:**
+- ❌ **Audio Lip-Sync**: Tavus does **not** provide a REST API endpoint for audio ingest
+- ❌ **Audio Push**: `/conversations/{id}/audio` endpoint returns 404
+- ❌ **Server-side Integration**: Cannot send TTS audio from backend to Tavus
 
-### Architecture: Dual Audio Paths
+### Why Audio Doesn't Work
 
+Tavus Conversations are built on **Daily.co (WebRTC)**, not REST APIs. The `conversation_url` is a Daily.co room that expects:
+- WebRTC clients to join as participants
+- Audio sent via WebRTC media streams (microphone/virtual audio)
+- Not HTTP POST requests with audio chunks
+
+### How to Actually Get Audio Working
+
+You need to join the Daily.co room **as a WebRTC participant** using Daily's client SDK:
+
+**Option 1: Browser-based (Recommended)**
+```javascript
+// Install: npm install @daily-co/daily-js
+import DailyIframe from '@daily-co/daily-js';
+
+// Join Tavus conversation as participant
+const daily = DailyIframe.createCallObject();
+await daily.join({ url: tavusConversationUrl });
+
+// Send TTS audio as virtual microphone
+const audioTrack = createAudioTrackFromPCM(ttsChunks);
+await daily.setInputDevicesAsync({
+  audioSource: audioTrack
+});
+```
+
+**Option 2: Server-side WebRTC**
+- Use Daily's REST API to create a meeting token
+- Use a headless WebRTC client (e.g., daily-python with virtual audio device)
+- Join room programmatically and stream TTS audio
+- More complex, but enables fully server-side operation
+
+### Architecture: Current vs. Target
+
+**Current (Audio Only):**
 ```
 TTS Generated (PCM16LE)
        ↓
-   ┌───┴────┐
-   ↓        ↓
-Path A    Path B
-   ↓        ↓
-Base64  Raw PCM
-   ↓        ↓
- SSE    Tavus API
-   ↓        ↓
-Frontend  Avatar Lip-Sync
-   ↓        ↓
-Web Audio  HLS Video
-   ↓        ↓
-   └───┬────┘
-     Speaker
+    Base64
+       ↓
+      SSE
+       ↓
+   Frontend
+       ↓
+  Web Audio API
+       ↓
+    Speaker ✅
 ```
 
-### Known Issues
+**Target (With Avatar Lip-Sync - Requires WebRTC):**
+```
+TTS Generated (PCM16LE)
+       ↓
+   ┌───┴────────┐
+   ↓            ↓
+Base64      WebRTC Track
+   ↓            ↓
+  SSE      Daily.co SDK
+   ↓            ↓
+Frontend   Tavus Avatar
+   ↓            ↓
+Web Audio   Lip-Sync ⚠️
+   ↓            ↓
+   └─────┬──────┘
+      Speaker
 
-- **Tavus Network Timeout:** If firewall blocks `api.tavus.io:443`, Tavus will fail silently. TTS still works.
-- **Solution:** Use VPN/proxy or ask network admin to allow outbound HTTPS to api.tavus.io
-- **Diagnostics:** Visit `/test-tavus` endpoint to check connectivity
+⚠️ = Not yet implemented
+```
+
+### Known Issues & Limitations
+
+1. **Tavus Audio Not Syncing (Major)**
+   - **Issue:** Tavus avatar displays but doesn't lip-sync to TTS audio
+   - **Root Cause:** Tavus Conversations API expects WebRTC audio, not REST API posts
+   - **Current State:** Avatar shows idle/waiting, audio plays separately through Web Audio
+   - **Solution:** Implement Daily.co WebRTC client to join conversation and send audio as media track
+   - **Workaround:** Use audio-only mode (`enableTavus: false`) for now
+
+2. **No Server-Side Audio Ingest**
+   - **Issue:** Cannot send TTS audio to Tavus from Node.js backend
+   - **Root Cause:** `/conversations/{id}/audio` endpoint doesn't exist (404)
+   - **Solution:** Must use WebRTC client (browser or headless) to join Daily.co room
+
+3. **Tavus Network Requirements**
+   - **Issue:** If firewall blocks `tavusapi.com:443`, conversation creation fails
+   - **Solution:** Use VPN/proxy or whitelist `tavusapi.com` and `tavus.daily.co`
+   - **Note:** TTS audio still works even if Tavus fails
 
 ## 📊 Performance Metrics
 
@@ -320,14 +385,21 @@ This project implements the full AI avatar pipeline:
 
 - **STEP 1:** ✅ Streaming TTS without avatar (baseline)
 - **STEP 2:** ✅ LiveKit token generation for WebRTC
-- **STEP 3:** ✅ Tavus Persona API avatar rendering + lip-sync
-  - Real speech synthesis (Windows SAPI)
-  - Non-blocking Tavus integration
-  - Dual audio paths (frontend + Tavus)
-  - HLS video streaming
-  - Perfect audio/video sync
+- **STEP 3:** ⚠️ Tavus Persona API avatar rendering (partial)
+  - ✅ Real speech synthesis (Windows SAPI)
+  - ✅ Non-blocking Tavus conversation creation
+  - ✅ HLS video streaming
+  - ✅ Avatar video display
+  - ❌ Audio lip-sync (requires WebRTC implementation)
+  - ❌ Server-side audio push (not supported by Tavus)
 
-**Future enhancements:**
+**Next Steps (To Complete Step 3):**
+- [ ] Integrate Daily.co client SDK in frontend
+- [ ] Send TTS audio via WebRTC media track
+- [ ] Join Tavus conversation as participant
+- [ ] Achieve audio/video sync through WebRTC
+
+**Future Enhancements:**
 - Real TTS APIs (ElevenLabs, Azure, Google)
 - Multiple Tavus personas
 - Expression/emotion control
@@ -359,15 +431,18 @@ This project implements the full AI avatar pipeline:
 - This is normal for offline TTS
 
 ### "No avatar video appearing"
-- Check Tavus API key and Persona ID in .env
+- Check Tavus API key, Persona ID, and Replica ID in .env
 - Verify Tavus connectivity with `/test-tavus`
 - Check browser console for HLS.js errors
-- Tavus API might be down or blocking your IP
+- Ensure `enableTavus: true` in request
+- Check server logs for "[Tavus] Conversation created" message
 
-### "Out of sync audio/video"
-- This should not happen (same PCM chunks sent to both)
-- If it does, check network latency to Tavus
-- Try reloading page and retrying
+### "Avatar shows but doesn't lip-sync"
+- **This is expected in current implementation**
+- Tavus requires WebRTC audio, not REST API
+- Avatar will display in idle/waiting state
+- Audio plays separately through Web Audio API
+- To fix: Implement Daily.co WebRTC client (see Tavus Integration section)
 
 ## 📝 Code Structure
 
