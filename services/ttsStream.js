@@ -94,8 +94,8 @@ function createTTSStream(text) {
     throw new Error('Text is required for TTS');
   }
 
-  if (text.length > 5000) {
-    throw new Error('Text too long. Max 5000 characters.');
+  if (text.length > 50000) {
+    throw new Error('Text too long. Max 50000 characters.');
   }
 
   return generateTTSChunks(text);

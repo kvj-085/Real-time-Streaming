@@ -163,8 +163,8 @@
 
         <div class="row">
           <div class="field">
-            <label for="textInput">Text to speak</label>
-            <textarea id="textInput">This is STEP 3. I am now a talking avatar powered by Tavus, with audio from real-time streaming TTS.</textarea>
+            <label for="textInput">Text to speak (max 50,000 characters)</label>
+            <textarea id="textInput" style="min-height: 180px;">This is STEP 3. I am now a talking avatar powered by Tavus, with audio from real-time streaming TTS. I can speak much longer texts now. You have plenty of time to open the avatar window and watch me speak. Try adding more sentences to test the full streaming experience. The avatar will sync perfectly with my voice as I speak each word. This is a real-time demonstration of text-to-speech with avatar lip-sync technology.</textarea>
           </div>
         </div>
 
@@ -251,42 +251,62 @@
       console.log('[Frontend] ★★★ initializeTavusWebRTC CALLED ★★★');
       console.log('[Frontend] conversationUrl parameter:', conversationUrl);
       try {
-        log(`Tavus avatar ready: ${conversationUrl}`);
-        console.log('[Frontend] Getting video container...');
+        log(`Setting up Tavus avatar with audio...`);
+        
+        // 1. Show avatar in embedded iframe
         const container = document.getElementById('videoContainer');
-        console.log('[Frontend] Container found:', !!container);
         container.innerHTML = `
-          <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 30px; text-align: center;">
-            <div style="font-size: 48px;">🎭</div>
-            <div style="font-size: 16px; font-weight: 600; color: var(--text);">Tavus Avatar Ready</div>
-            <div style="font-size: 13px; color: var(--muted); max-width: 300px; line-height: 1.6;">
-              Your avatar is live and ready to speak. Click the button below to open the avatar viewer.
-            </div>
-            <button onclick="window.open('${conversationUrl}', '_blank', 'width=800,height=1000')" 
-                    style="background: linear-gradient(120deg, var(--accent), var(--accent-2)); color: #0b1221; border: none; border-radius: 12px; padding: 16px 32px; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 12px 30px rgba(16,185,129,0.25); transition: transform 0.1s ease;">
-              🚀 Open Avatar Viewer
-            </button>
-            <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">
-              Audio is streaming to the avatar in real-time
-            </div>
-          </div>
+          <iframe 
+            src="${conversationUrl}" 
+            allow="camera; microphone; autoplay; display-capture; fullscreen"
+            style="width: 100%; height: 100%; border: none; border-radius: 12px; background: #000;"
+          ></iframe>
         `;
+        log('Avatar embedded in video container');
         
-        log('Click "Open Avatar Viewer" to see your talking avatar');
-        
-        console.log('[Frontend] Setting container innerHTML...');
-        console.log('[Frontend] Container updated, attempting to open window...');
-        
-        // Auto-open in new tab
-        const newWindow = window.open(conversationUrl, '_blank', 'width=800,height=1000');
-        console.log('[Frontend] window.open result:', newWindow);
-        if (newWindow) {
-          log('Avatar viewer opened in new window');
-          console.log('[Frontend] ✓ Window opened successfully');
-        } else {
-          log('Popup blocked - click the button to open avatar');
-          console.log('[Frontend] ⚠️ Popup was blocked');
+        // 2. Join the Daily.co room invisibly to send audio
+        if (!window.DailyIframe) {
+          log('Waiting for Daily.co SDK to load...');
+          await new Promise(resolve => setTimeout(resolve, 1000));
         }
+        
+        if (window.DailyIframe) {
+          log('Joining Daily.co room for audio injection...');
+          
+          // Create invisible call object (audio-only, no video)
+          callObject = window.DailyIframe.createCallObject({
+            audioSource: true,
+            videoSource: false,
+          });
+          
+          // Join the room
+          await callObject.join({ 
+            url: conversationUrl,
+            userName: 'TTS-Audio-Bot',
+            startAudioOff: false,
+            startVideoOff: true,
+          });
+          
+          log('✓ Joined room - preparing audio track...');
+          
+          // Create audio track for injecting TTS chunks
+          if (typeof MediaStreamTrackGenerator !== 'undefined') {
+            const audioGenerator = new MediaStreamTrackGenerator({ kind: 'audio' });
+            audioTrack = audioGenerator;
+            audioWriter = audioGenerator.writable.getWriter();
+            
+            // Set as microphone input
+            await callObject.setInputDevicesAsync({
+              audioSource: audioTrack
+            });
+            
+            log('✓ Audio track ready - avatar will lip-sync to TTS!');
+          } else {
+            log('⚠️ MediaStreamTrackGenerator not supported - lip-sync disabled');
+          }
+        }
+        
+        console.log('[Frontend] ✓ Setup complete');
 
       } catch (err) {
         console.error('Tavus WebRTC initialization error:', err);
