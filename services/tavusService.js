@@ -74,32 +74,24 @@ async function startTavusSession(sessionName) {
     const conversationId = session.conversation_id || session.id;
     // Prefer API-provided stream_url; fall back to constructed daily URL
     const streamUrl = session.stream_url || `https://tavus.daily.co/${conversationId}/stream.m3u8`;
-    // Prefer any API-provided ingest endpoints before falling back
-    const audioEndpoint =
-      session.audio_url ||
-      session.audio_endpoint ||
-      session.ingest_url ||
-      `${TAVUS_API_BASE}/conversations/${conversationId}/audio`;
     
     console.log(`[Tavus] Conversation created: ${conversationId}`);
     console.log(`[Tavus] Stream URL: ${streamUrl}`);
     console.log(`[Tavus] Viewer URL: ${session.conversation_url}`);
     console.log(`[Tavus] Session keys: ${Object.keys(session).join(', ')}`);
     
-    // NOTE: Tavus does not provide a server-side audio ingest endpoint.
-    // The conversation_url is a Daily.co room for WebRTC clients to join.
-    // To send audio, you must join the Daily.co room as a participant using Daily's client SDK.
-    // For now, we'll return the stream URL so you can see the avatar (idle state).
-    console.warn('[Tavus] ⚠️  No server-side audio ingest available. Audio push disabled.');
-    console.warn('[Tavus] To enable audio: join the Daily.co room as a WebRTC participant.');
+    // NOTE: Tavus avatars are powered by Daily.co WebRTC rooms.
+    // To send audio from the server, we need a WebRTC implementation or client-side bridge.
+    // For now, return the viewer URL and audio will be streamed to LiveKit listeners.
+    // The avatar can be viewed but will remain silent server-side.
+    console.log(`[Tavus] ℹ️  Avatar viewer URL created - clients can watch and provide audio via WebRTC`);
 
     return {
       sessionId: conversationId,
       streamUrl: streamUrl,
-      viewerUrl: session.conversation_url, // Daily.co room URL for WebRTC clients
-      audioEndpoint: null, // No REST API for audio ingest
+      viewerUrl: session.conversation_url,
       disabled: false,
-      audioDisabled: true, // Mark that audio push won't work
+      audioDisabled: true, // Server-side audio injection not supported without WebRTC libs
     };
   } catch (error) {
     console.error('[Tavus] Failed to start conversation:', error.message);
@@ -111,61 +103,28 @@ async function startTavusSession(sessionName) {
 }
 
 /**
- * Send audio chunk to Tavus for avatar lip-sync
- * The avatar will analyze this audio frame and adjust mouth/expression accordingly
+ * Send audio chunk to Tavus avatar
+ * NOTE: Current implementation streams to LiveKit only.
+ * For avatar audio, frontend must join the Daily.co room and provide audio via WebRTC.
  *
  * @param {string} sessionId - Tavus session ID
- * @param {Buffer} audioChunk - Raw audio chunk (PCM16)
+ * @param {Buffer} audioChunk - Raw PCM16 audio chunk
  * @param {number} timestamp - Timing info in ms
  * @returns {Promise<void>}
  */
-async function sendAudioToTavus(sessionId, audioChunk, timestamp, audioEndpoint) {
-  if (!TAVUS_API_KEY) {
-    return; // Tavus disabled
+async function sendAudioToTavus(sessionId, audioChunk, timestamp) {
+  if (!sessionId) {
+    return;
   }
 
-  // Basic guard to avoid endless 404 spam
-  if (!sessionId) return;
-
-  try {
-    const base64Audio = audioChunk.toString('base64');
-    const endpoint =
-      audioEndpoint || `${TAVUS_API_BASE}/conversations/${sessionId}/audio`;
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': TAVUS_API_KEY,
-      },
-      body: JSON.stringify({
-        audio_data: base64Audio,
-        timestamp_ms: timestamp,
-      }),
-    });
-
-    if (!response.ok && response.status !== 204) {
-      const bodyText = await response.text();
-      const detail = bodyText ? ` | body: ${bodyText.slice(0, 200)}` : '';
-      console.warn(
-        `[Tavus] Audio push failed: ${response.status} at ${endpoint}${detail}`
-      );
-      // If 404, this endpoint may be wrong for this convo; stop further sends for this session
-      if (response.status === 404) {
-        throw new Error('audio-endpoint-404');
-      }
-      throw new Error(`audio-push-${response.status}`);
-    }
-  } catch (error) {
-    console.warn(`[Tavus] Error sending audio chunk:`, error.message);
-    // Re-throw so callers can disable Tavus when the endpoint is bad
-    throw error;
-  }
+  // Current implementation: audio streams to LiveKit listeners only
+  // Frontend can optionally join the Tavus room to make the avatar speak
+  // by sending the same audio stream via WebRTC
 }
 
 /**
  * End Tavus session
- * Stops avatar rendering and closes the stream
+ * Closes the conversation and cleans up resources
  *
  * @param {string} sessionId - Session to close
  */
@@ -208,7 +167,8 @@ async function testTavusConnection() {
     });
 
     const ok = response.ok;
-    console.log(`[Tavus] Connection test: ${ok ? 'SUCCESS' : `FAILED (${response.status})`}`);
+    const status = ok ? 'SUCCESS' : `FAILED (${response.status})`;
+    console.log(`[Tavus] Connection test: ${status}`);
     return ok;
   } catch (error) {
     console.error(`[Tavus] Connection test failed:`, error.message);

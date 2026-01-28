@@ -8,7 +8,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
+const path = require('node:path');
 const { speakHandler } = require('./routes/speak');
 const { shutdown } = require('./services/livekitService');
 const { testTavusConnection } = require('./services/tavusService');

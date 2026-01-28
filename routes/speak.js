@@ -18,7 +18,7 @@ const { streamTTSChunks } = require('../services/livekitService');
  * @param {Object} res - Express response
  */
 async function speakHandler(req, res) {
-  const { text, room, enableTavus } = req.body;
+  const { text, enableTavus } = req.body;
   
   // Validate input
   if (!text) {
@@ -65,15 +65,14 @@ async function speakHandler(req, res) {
       );
     }
     
-    // Send Tavus video stream URL to client
+    // Send Tavus conversation URL to client
     if (result.tavusSession) {
       res.write(`data: ${JSON.stringify({
         type: 'tavus',
-        sessionId: result.tavusSession.sessionId,
-        streamUrl: result.tavusSession.streamUrl,
+        conversationUrl: result.tavusSession.conversation_url
       })}\n\n`);
       
-      console.log(`[Route] Sent Tavus stream URL to client`);
+      console.log(`[Route] Sent Tavus conversation URL to client`);
     }
     
     // Send completion event
@@ -81,7 +80,7 @@ async function speakHandler(req, res) {
       type: 'complete',
       totalChunks: result.chunks.length,
       totalTime: Date.now() - requestStartTime,
-      tavusEnabled: result.tavusSession ? true : false,
+      tavusEnabled: !!result.tavusSession,
     })}\n\n`);
     
     console.log(`[Route] Stream complete. Total chunks: ${result.chunks.length}`);

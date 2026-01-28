@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.tavus.io https://cdn.jsdelivr.net https://unpkg.com; media-src 'self' blob: https:; img-src 'self' data: https:;">
   <title>LiveKit TTS + Tavus Avatar </title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <link rel="preconnect" href="https://fonts.gstatic.com">
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
@@ -198,7 +198,14 @@
      * - Receive audio chunks via SSE
      * - Display Tavus video when ready
      * - Play audio using Web Audio API
+     * - Send audio to Tavus via WebRTC (Daily.co)
      */
+
+    // Import Daily.co SDK
+    const DailyScript = document.createElement('script');
+    DailyScript.src = 'https://cdn.daily.co/daily-js';
+    DailyScript.async = true;
+    document.head.appendChild(DailyScript);
 
     const textInput = document.getElementById('textInput');
     const enableTavusCheckbox = document.getElementById('enableTavus');
@@ -210,6 +217,9 @@
     let audioContext = null;
     let currentTime = 0;
     let tavusVideoElement = null;
+    let callObject = null;
+    let audioTrack = null;
+    let audioWriter = null;
 
     function log(msg) {
       const line = document.createElement('div');
@@ -235,35 +245,92 @@
       return audioContext;
     }
 
-    function displayTavusVideo(streamUrl) {
-      // Clear placeholder
-      videoContainer.innerHTML = '';
 
-      // Create video element for HLS stream
-      tavusVideoElement = document.createElement('video');
-      tavusVideoElement.autoplay = true;
-      tavusVideoElement.playsInline = true;
-      tavusVideoElement.muted = false; // Audio comes from our Web Audio API
-      tavusVideoElement.style.width = '100%';
-      tavusVideoElement.style.height = '100%';
-      tavusVideoElement.style.objectFit = 'cover';
 
-      // Use HLS.js if available for better compatibility
-      if (typeof Hls !== 'undefined') {
-        const hls = new Hls({ lowLatencyMode: true });
-        hls.loadSource(streamUrl);
-        hls.attachMedia(tavusVideoElement);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          tavusVideoElement.play().catch(err => console.warn('Video play failed:', err));
-        });
-      } else {
-        // Fallback for browsers with native HLS support
-        tavusVideoElement.src = streamUrl;
-        tavusVideoElement.oncanplay = () => tavusVideoElement.play().catch(err => console.warn('Video play failed:', err));
+    async function initializeTavusWebRTC(conversationUrl) {
+      try {
+        log(`Tavus avatar URL received`);
+        
+        // Display the avatar using a video element with HLS stream
+        const container = document.getElementById('videoContainer');
+        
+        // Try multiple approaches to display the avatar
+        // Approach 1: Try the HLS stream URL directly
+        const streamUrl = conversationUrl.replace(/\/$/, '') + '/stream.m3u8';
+        
+        container.innerHTML = `
+          <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px;">
+            <video id="avatarVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px; background: #000;"></video>
+            <div style="text-align: center; font-size: 12px; color: var(--muted);">
+              <div>Avatar stream: <a href="${conversationUrl}" target="_blank" style="color: var(--accent);">Open in new tab</a></div>
+              <div style="margin-top: 8px; font-size: 11px;">If avatar doesn't appear above, click the link to view in a separate window</div>
+            </div>
+          </div>
+        `;
+        
+        // Try loading with HLS.js if available, otherwise direct load
+        const video = document.getElementById('avatarVideo');
+        
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          hls.loadSource(streamUrl);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            log('Avatar video stream loaded successfully');
+            video.play().catch(e => log(`Autoplay blocked: ${e.message}`));
+          });
+          hls.on(Hls.Events.ERROR, (event, data) => {
+            log(`HLS error: ${data.type} - ${data.details}`);
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          video.src = streamUrl;
+          video.addEventListener('loadedmetadata', () => {
+            log('Avatar video stream loaded (native HLS)');
+            video.play().catch(e => log(`Autoplay blocked: ${e.message}`));
+          });
+        } else {
+          log('HLS not supported - use the link to open avatar in new tab');
+        }
+        
+        // Audio injection is optional - keeping it simple for now
+        log(`Open avatar link if video doesn't show: ${conversationUrl}`);
+
+      } catch (err) {
+        console.error('Tavus WebRTC initialization error:', err);
+        log(`WebRTC error: ${err.message}`);
       }
+    }
 
-      videoContainer.appendChild(tavusVideoElement);
-      log('Tavus video stream loaded');
+    async function sendAudioToTavus(base64Data) {
+      if (!audioWriter) return;
+
+      try {
+        // Decode base64 PCM16 little-endian audio (48kHz, mono)
+        const bytes = Uint8Array.from(atob(base64Data), c => c.charCodeAt(0));
+        const sampleCount = bytes.byteLength / 2;
+        const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+
+        // Convert PCM16 samples to float32
+        const float32Array = new Float32Array(sampleCount);
+        for (let i = 0; i < sampleCount; i++) {
+          float32Array[i] = view.getInt16(i * 2, true) / 32768;
+        }
+
+        // Create AudioData from the samples
+        const audioData = new AudioData({
+          format: 'f32',
+          sampleRate: 48000,
+          numberOfFrames: sampleCount,
+          numberOfChannels: 1,
+          timestamp: 0,
+          data: float32Array
+        });
+
+        // Write to the audio track
+        await audioWriter.write(audioData);
+      } catch (e) {
+        console.error('Error sending audio to Tavus:', e);
+      }
     }
 
     async function playAudioChunk(base64Data) {
@@ -338,12 +405,17 @@
               if (data.type === 'audio') {
                 chunkCount++;
                 await playAudioChunk(data.chunk);
+                if (enableTavusCheckbox.checked && callObject) {
+                  await sendAudioToTavus(data.chunk);
+                }
                 if (chunkCount % 3 === 0) {
                   log(`Audio chunk ${chunkCount} (streaming...)`);
                 }
               } else if (data.type === 'tavus') {
                 log('Tavus session started');
-                displayTavusVideo(data.streamUrl);
+                if (enableTavusCheckbox.checked) {
+                  await initializeTavusWebRTC(data.conversationUrl);
+                }
               } else if (data.type === 'complete') {
                 const elapsed = Date.now() - start;
                 setStatus(`Complete: ${chunkCount} chunks in ${elapsed}ms`, 'success');
@@ -364,12 +436,6 @@
     }
 
     speakBtn.addEventListener('click', sendSpeak);
-
-    // Load HLS.js for video streaming
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
-    script.async = true;
-    document.head.appendChild(script);
   </script>
 </body>
 </html>

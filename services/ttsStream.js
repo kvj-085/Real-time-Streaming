@@ -16,8 +16,8 @@ const SAMPLE_RATE = 48000; // 48kHz PCM keeps WebRTC happy
 const CHANNELS = 1; // mono for speech
 const CHUNK_DURATION_MS = 40; // 20–50ms target; 40ms is a good middle ground
 
-const { execFile } = require('child_process');
-const { promisify } = require('util');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const execFileAsync = promisify(execFile);
 
 function sleep(ms) {

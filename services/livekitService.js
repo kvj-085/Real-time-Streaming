@@ -1,5 +1,5 @@
 const { createTTSStream } = require('./ttsStream');
-const { startTavusSession, sendAudioToTavus, endTavusSession } = require('./tavusService');
+const { startTavusSession, endTavusSession } = require('./tavusService');
 
 /**
  * Stream TTS chunks to both LiveKit (audio) and Tavus (avatar lip-sync).
@@ -21,33 +21,8 @@ async function streamTTSChunks(text, tavusEnabled = true) {
   let count = 0;
   const chunks = [];
   let tavusSession = null;
-  const pendingForTavus = [];
-  let flushingPending = false;
 
-  // Helper: flush buffered chunks to Tavus in order (non-blocking to SSE)
-  const flushPendingAsync = () => {
-    if (flushingPending || !tavusSession || tavusSession.disabled) return;
-    flushingPending = true;
-    (async () => {
-      while (pendingForTavus.length && tavusSession && !tavusSession.disabled) {
-        const { chunk, timestamp } = pendingForTavus.shift();
-        try {
-          await sendAudioToTavus(
-            tavusSession.sessionId,
-            chunk,
-            timestamp,
-            tavusSession.audioEndpoint
-          );
-        } catch (err) {
-          console.warn(`[Tavus] Buffered chunk failed:`, err.message);
-          break; // stop flushing on failure to avoid tight loop
-        }
-      }
-      flushingPending = false;
-    })();
-  };
-
-  // Start Tavus in background
+  // Start Tavus in background to get viewer URL only
   let tavusSessionPromise = null;
   if (tavusEnabled) {
     tavusSessionPromise = startTavusSession(`tts-${Date.now()}`)
@@ -55,13 +30,12 @@ async function streamTTSChunks(text, tavusEnabled = true) {
         if (session && !session.disabled) {
           tavusSession = session;
           activeSessions[session.sessionId] = true;
-          console.log('[TTS Stream] Tavus connected in background');
-          flushPendingAsync();
+          console.log('[TTS Stream] Tavus viewer URL created - share with frontend for avatar display');
         }
         return session;
       })
       .catch(err => {
-        console.log('[TTS Stream] Tavus failed, continuing audio-only');
+        console.log('[TTS Stream] Tavus unavailable, audio-only mode');
         return { disabled: true };
       });
   }
@@ -72,22 +46,9 @@ async function streamTTSChunks(text, tavusEnabled = true) {
     const base64 = chunk.toString('base64');
     chunks.push(base64);
 
-    // Send to Tavus if session is active AND audio is supported, else buffer
-    if (tavusSession && !tavusSession.disabled && !tavusSession.audioDisabled) {
-      sendAudioToTavus(
-        tavusSession.sessionId,
-        chunk,
-        timestamp,
-        tavusSession.audioEndpoint
-      ).catch(err => {
-        console.warn(`[Tavus] Chunk ${count} failed:`, err.message);
-        if (err.message === 'audio-endpoint-404') {
-          tavusSession.disabled = true;
-        }
-      });
-    } else if (tavusEnabled && !tavusSession?.audioDisabled) {
-      pendingForTavus.push({ chunk, timestamp });
-    }
+    // NOTE: Audio streams to LiveKit listeners in real-time.
+    // For avatar animation, frontend must join the Tavus Daily.co room
+    // and send audio via WebRTC to make the avatar speak.
 
     const elapsed = Date.now() - start;
     console.log(
@@ -97,15 +58,11 @@ async function streamTTSChunks(text, tavusEnabled = true) {
   }
 
   // If Tavus not ready yet, give it a brief moment to resolve so we can return the stream URL
-  if (!tavusSession && tavusSessionPromise) {
-    await Promise.race([
+  if (!tavusSession && tavusSessionPromise !== null) {
+    tavusSession = await Promise.race([
       tavusSessionPromise,
       new Promise(resolve => setTimeout(() => resolve({ disabled: true, pending: true }), 2000)),
     ]);
-  }
-
-  if (tavusSession && !tavusSession.disabled && pendingForTavus.length) {
-    flushPendingAsync();
   }
 
   const totalTime = Date.now() - start;

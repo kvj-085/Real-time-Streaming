@@ -7,14 +7,19 @@
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
-  "keywords": ["tts", "streaming", "realtime", "sse"],
+  "keywords": [
+    "tts",
+    "streaming",
+    "realtime",
+    "sse"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "express": "^4.18.2",
+    "@daily-co/daily-js": "^0.86.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "livekit-server-sdk": "^0.5.2",
+    "express": "^4.18.2",
     "node-fetch": "^2.7.0"
   }
 }
