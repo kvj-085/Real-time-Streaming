@@ -66,13 +66,18 @@ async function speakHandler(req, res) {
     }
     
     // Send Tavus conversation URL to client
+    console.log(`[Route] Checking Tavus session:`, result.tavusSession);
     if (result.tavusSession) {
-      res.write(`data: ${JSON.stringify({
+      console.log(`[Route] Tavus session exists, viewerUrl: ${result.tavusSession.viewerUrl}`);
+      const tavusMessage = {
         type: 'tavus',
-        conversationUrl: result.tavusSession.conversation_url
-      })}\n\n`);
-      
-      console.log(`[Route] Sent Tavus conversation URL to client`);
+        conversationUrl: result.tavusSession.viewerUrl
+      };
+      console.log(`[Route] Sending Tavus message:`, JSON.stringify(tavusMessage));
+      res.write(`data: ${JSON.stringify(tavusMessage)}\n\n`);
+      console.log(`[Route] ✓ Tavus URL sent to client successfully`);
+    } else {
+      console.log(`[Route] ⚠️ No Tavus session available`);
     }
     
     // Send completion event

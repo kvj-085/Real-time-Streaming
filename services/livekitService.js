@@ -16,29 +16,36 @@ const { startTavusSession, endTavusSession } = require('./tavusService');
 let activeSessions = {}; // Track active Tavus sessions
 
 async function streamTTSChunks(text, tavusEnabled = true) {
-  const ttsStream = createTTSStream(text);
   const start = Date.now();
   let count = 0;
   const chunks = [];
   let tavusSession = null;
 
-  // Start Tavus in background to get viewer URL only
-  let tavusSessionPromise = null;
+  // WAIT for Tavus session BEFORE starting TTS stream
   if (tavusEnabled) {
-    tavusSessionPromise = startTavusSession(`tts-${Date.now()}`)
-      .then(session => {
-        if (session && !session.disabled) {
-          tavusSession = session;
-          activeSessions[session.sessionId] = true;
-          console.log('[TTS Stream] Tavus viewer URL created - share with frontend for avatar display');
-        }
-        return session;
-      })
-      .catch(err => {
-        console.log('[TTS Stream] Tavus unavailable, audio-only mode');
-        return { disabled: true };
-      });
+    console.log('[TTS Stream] Creating Tavus session first...');
+    try {
+      tavusSession = await Promise.race([
+        startTavusSession(`tts-${Date.now()}`),
+        new Promise(resolve => setTimeout(() => resolve({ disabled: true, timeout: true }), 8000)),
+      ]);
+      
+      if (tavusSession && !tavusSession.disabled && !tavusSession.timeout) {
+        activeSessions[tavusSession.sessionId] = true;
+        console.log('[TTS Stream] ✓ Tavus session ready BEFORE streaming audio');
+        console.log(`[TTS Stream] Viewer URL: ${tavusSession.viewerUrl}`);
+      } else {
+        console.log('[TTS Stream] Tavus unavailable or timed out, continuing audio-only');
+        tavusSession = null;
+      }
+    } catch (err) {
+      console.log('[TTS Stream] Tavus error, continuing audio-only:', err.message);
+      tavusSession = null;
+    }
   }
+
+  // NOW start TTS stream with Tavus already ready
+  const ttsStream = createTTSStream(text);
 
   for await (const chunk of ttsStream) {
     count += 1;
@@ -57,25 +64,17 @@ async function streamTTSChunks(text, tavusEnabled = true) {
     );
   }
 
-  // If Tavus not ready yet, give it a brief moment to resolve so we can return the stream URL
-  if (!tavusSession && tavusSessionPromise !== null) {
-    tavusSession = await Promise.race([
-      tavusSessionPromise,
-      new Promise(resolve => setTimeout(() => resolve({ disabled: true, pending: true }), 2000)),
-    ]);
-  }
-
   const totalTime = Date.now() - start;
   console.log(
     `[TTS Stream] Completed ${count} chunks in ${totalTime}ms | ` +
-    `Tavus: ${tavusSession?.disabled ? 'disabled' : 'active'}`
+    `Tavus: ${tavusSession ? 'active' : 'disabled'}`
   );
 
   return {
     chunks,
     count,
     elapsedMs: totalTime,
-    tavusSession: tavusSession?.disabled ? null : tavusSession,
+    tavusSession: tavusSession,
   };
 }
 

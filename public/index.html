@@ -248,52 +248,45 @@
 
 
     async function initializeTavusWebRTC(conversationUrl) {
+      console.log('[Frontend] ★★★ initializeTavusWebRTC CALLED ★★★');
+      console.log('[Frontend] conversationUrl parameter:', conversationUrl);
       try {
-        log(`Tavus avatar URL received`);
-        
-        // Display the avatar using a video element with HLS stream
+        log(`Tavus avatar ready: ${conversationUrl}`);
+        console.log('[Frontend] Getting video container...');
         const container = document.getElementById('videoContainer');
-        
-        // Try multiple approaches to display the avatar
-        // Approach 1: Try the HLS stream URL directly
-        const streamUrl = conversationUrl.replace(/\/$/, '') + '/stream.m3u8';
-        
+        console.log('[Frontend] Container found:', !!container);
         container.innerHTML = `
-          <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; padding: 20px;">
-            <video id="avatarVideo" autoplay playsinline muted style="width: 100%; height: 100%; object-fit: cover; border-radius: 12px; background: #000;"></video>
-            <div style="text-align: center; font-size: 12px; color: var(--muted);">
-              <div>Avatar stream: <a href="${conversationUrl}" target="_blank" style="color: var(--accent);">Open in new tab</a></div>
-              <div style="margin-top: 8px; font-size: 11px;">If avatar doesn't appear above, click the link to view in a separate window</div>
+          <div style="width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 30px; text-align: center;">
+            <div style="font-size: 48px;">🎭</div>
+            <div style="font-size: 16px; font-weight: 600; color: var(--text);">Tavus Avatar Ready</div>
+            <div style="font-size: 13px; color: var(--muted); max-width: 300px; line-height: 1.6;">
+              Your avatar is live and ready to speak. Click the button below to open the avatar viewer.
+            </div>
+            <button onclick="window.open('${conversationUrl}', '_blank', 'width=800,height=1000')" 
+                    style="background: linear-gradient(120deg, var(--accent), var(--accent-2)); color: #0b1221; border: none; border-radius: 12px; padding: 16px 32px; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 12px 30px rgba(16,185,129,0.25); transition: transform 0.1s ease;">
+              🚀 Open Avatar Viewer
+            </button>
+            <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+              Audio is streaming to the avatar in real-time
             </div>
           </div>
         `;
         
-        // Try loading with HLS.js if available, otherwise direct load
-        const video = document.getElementById('avatarVideo');
+        log('Click "Open Avatar Viewer" to see your talking avatar');
         
-        if (Hls.isSupported()) {
-          const hls = new Hls();
-          hls.loadSource(streamUrl);
-          hls.attachMedia(video);
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            log('Avatar video stream loaded successfully');
-            video.play().catch(e => log(`Autoplay blocked: ${e.message}`));
-          });
-          hls.on(Hls.Events.ERROR, (event, data) => {
-            log(`HLS error: ${data.type} - ${data.details}`);
-          });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = streamUrl;
-          video.addEventListener('loadedmetadata', () => {
-            log('Avatar video stream loaded (native HLS)');
-            video.play().catch(e => log(`Autoplay blocked: ${e.message}`));
-          });
+        console.log('[Frontend] Setting container innerHTML...');
+        console.log('[Frontend] Container updated, attempting to open window...');
+        
+        // Auto-open in new tab
+        const newWindow = window.open(conversationUrl, '_blank', 'width=800,height=1000');
+        console.log('[Frontend] window.open result:', newWindow);
+        if (newWindow) {
+          log('Avatar viewer opened in new window');
+          console.log('[Frontend] ✓ Window opened successfully');
         } else {
-          log('HLS not supported - use the link to open avatar in new tab');
+          log('Popup blocked - click the button to open avatar');
+          console.log('[Frontend] ⚠️ Popup was blocked');
         }
-        
-        // Audio injection is optional - keeping it simple for now
-        log(`Open avatar link if video doesn't show: ${conversationUrl}`);
 
       } catch (err) {
         console.error('Tavus WebRTC initialization error:', err);
@@ -401,6 +394,7 @@
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               const data = JSON.parse(line.substring(6));
+              console.log('[Frontend] Received SSE message:', data.type, data);
 
               if (data.type === 'audio') {
                 chunkCount++;
@@ -412,9 +406,15 @@
                   log(`Audio chunk ${chunkCount} (streaming...)`);
                 }
               } else if (data.type === 'tavus') {
-                log('Tavus session started');
+                console.log('[Frontend] ✓ Tavus message received!');
+                console.log('[Frontend] conversationUrl:', data.conversationUrl);
+                console.log('[Frontend] enableTavusCheckbox:', enableTavusCheckbox.checked);
+                log(`Tavus URL received: ${data.conversationUrl}`);
                 if (enableTavusCheckbox.checked) {
+                  console.log('[Frontend] Calling initializeTavusWebRTC...');
                   await initializeTavusWebRTC(data.conversationUrl);
+                } else {
+                  console.log('[Frontend] Tavus disabled by checkbox');
                 }
               } else if (data.type === 'complete') {
                 const elapsed = Date.now() - start;
