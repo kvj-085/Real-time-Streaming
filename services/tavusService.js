@@ -34,13 +34,13 @@ const TAVUS_API_BASE = process.env.TAVUS_API_BASE;
 
 /**
  * Start a Tavus streaming session
- * Creates a new persona instance that will render avatar video
- * synchronized with incoming audio stream
+ * Creates a conversation where the avatar will speak the provided text
  *
  * @param {string} sessionName - Unique name for this session
+ * @param {string} textToSpeak - The text for the avatar to speak
  * @returns {Promise<Object>} Session info with video stream URL
  */
-async function startTavusSession(sessionName) {
+async function startTavusSession(sessionName, textToSpeak = null) {
   if (!TAVUS_API_KEY || !TAVUS_PERSONA_ID || !TAVUS_REPLICA_ID) {
     console.warn('[Tavus] API key, persona ID, or replica ID missing. Tavus disabled.');
     return { disabled: true };
@@ -50,6 +50,19 @@ async function startTavusSession(sessionName) {
     const endpoint = `${TAVUS_API_BASE}/conversations`;
     
     console.log(`[Tavus] Creating conversation at: ${endpoint}`);
+    if (textToSpeak) {
+      console.log(`[Tavus] Avatar will speak: "${textToSpeak}"`);
+    }
+    
+    const requestBody = {
+      replica_id: TAVUS_REPLICA_ID,
+      persona_id: TAVUS_PERSONA_ID,
+    };
+    
+    // If text provided, use it as custom greeting
+    if (textToSpeak) {
+      requestBody.custom_greeting = textToSpeak;
+    }
     
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -57,10 +70,7 @@ async function startTavusSession(sessionName) {
         'Content-Type': 'application/json',
         'x-api-key': TAVUS_API_KEY,
       },
-      body: JSON.stringify({
-        replica_id: TAVUS_REPLICA_ID,
-        persona_id: TAVUS_PERSONA_ID,
-      }),
+      body: JSON.stringify(requestBody),
       timeout: 15000,
     });
 
